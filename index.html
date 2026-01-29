@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 运动评估</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 15px;
+            padding-bottom: 80px;
+        }
+        .container { max-width: 500px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h1 { font-size: 1.5em; margin-bottom: 5px; }
+        .header p { font-size: 0.9em; color: #a0a0a0; }
+        .video-container {
+            position: relative;
+            width: 100%;
+            background: #0f0f1a;
+            border-radius: 15px;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+            margin-bottom: 15px;
+        }
+        #videoElement {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+        #imageElement { width: 100%; height: 100%; object-fit: contain; }
+        #canvasOverlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            transform: scaleX(-1);
+            pointer-events: none;
+        }
+        .placeholder {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #666;
+        }
+        .placeholder p { font-size: 0.85em; }
+        .controls {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 15px;
+        }
+        .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        .btn {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid rgba(255,255,255,0.2);
+            border-radius: 12px;
+            background: transparent;
+            color: #a0a0a0;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+        .btn.active {
+            background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+            color: #fff;
+            border-color: #00d4ff;
+        }
+        .btn-upload.active {
+            background: linear-gradient(135deg, #7b2cbf 0%, #5a189a 100%);
+            color: #fff;
+            border-color: #7b2cbf;
+        }
+        .btn-action {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 12px;
+            font-size: 1em;
+            cursor: pointer;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        .btn-analyze {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a5a 100%);
+            color: #fff;
+        }
+        .btn-analyze:disabled {
+            background: rgba(255,255,255,0.1);
+            color: #666;
+            cursor: not-allowed;
+        }
+        .status {
+            text-align: center;
+            padding: 10px;
+            border-radius: 10px;
+            margin-bottom: 12px;
+            font-size: 0.9em;
+            display: none;
+        }
+        .results {
+            display: none;
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 18px;
+            margin-top: 15px;
+        }
+        .score-card { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 18px; margin-bottom: 15px; }
+        .score-header { text-align: center; margin-bottom: 18px; }
+        .score-number {
+            font-size: 3em;
+            font-weight: 800;
+            background: linear-gradient(135deg, #00d4ff 0%, #7b2cbf 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .score-label { color: #a0a0a0; margin-top: 8px; font-size: 0.9em; }
+        .score-breakdown {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+        .breakdown-item {
+            text-align: center;
+            padding: 12px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+        }
+        .breakdown-item .label { font-size: 0.75em; color: #a0a0a0; margin-bottom: 5px; }
+        .breakdown-item .value { font-size: 1.4em; font-weight: 700; color: #00d4ff; }
+        .feedback-section h3 { margin-bottom: 12px; font-size: 1.1em; }
+        .feedback-list { list-style: none; }
+        .feedback-item {
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            border-radius: 10px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            font-size: 0.9em;
+        }
+        .feedback-item.good { background: rgba(76, 175, 80, 0.1); }
+        .feedback-item.improve { background: rgba(255, 152, 0, 0.1); }
+        .feedback-item .icon { flex-shrink: 0; }
+        .suggestions h3 { margin-bottom: 12px; font-size: 1.1em; }
+        .suggestion-item {
+            padding: 10px;
+            margin-bottom: 8px;
+            background: rgba(0, 212, 255, 0.1);
+            border-radius: 10px;
+            border-left: 3px solid #00d4ff;
+            font-size: 0.9em;
+        }
+        .hidden { display: none !important; }
+        #fileInput { display: none; }
+        .restart-btn {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid rgba(255,255,255,0.2);
+            border-radius: 12px;
+            background: transparent;
+            color: #a0a0a0;
+            font-size: 0.95em;
+            cursor: pointer;
+            margin-top: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏃 AI 运动评估</h1>
+            <p>拍照或上传，即刻分析</p>
+        </div>
+
+        <div class="video-container">
+            <video id="videoElement" autoplay playsinline muted></video>
+            <img id="imageElement" style="display: none;">
+            <canvas id="canvasOverlay"></canvas>
+            <div class="placeholder" id="placeholder">
+                <p>选择输入方式</p>
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="btn-group">
+                <button class="btn active" id="cameraMode" onclick="setInputMode('camera')">📷 摄像头</button>
+                <button class="btn btn-upload" id="uploadMode" onclick="setInputMode('upload')">📤 上传</button>
+            </div>
+
+            <div class="btn-group" id="modeSelector">
+                <button class="btn active" id="photoMode" onclick="setAnalyzeMode('photo')">📷 拍照</button>
+                <button class="btn" id="videoMode" onclick="setAnalyzeMode('video')">🎥 视频</button>
+            </div>
+
+            <div class="status" id="status"></div>
+
+            <button class="btn-action" id="startCamera" onclick="startCamera()" style="background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%); color: #fff;">
+                🎬 开启摄像头
+            </button>
+
+            <button class="btn-action hidden" id="uploadBtn" onclick="document.getElementById('fileInput').click()" style="background: linear-gradient(135deg, #7b2cbf 0%, #5a189a 100%); color: #fff;">
+                📤 上传图片
+            </button>
+
+            <button class="btn-action btn-analyze" id="analyzeBtn" onclick="analyze()" disabled>
+                ⚡ 开始分析
+            </button>
+        </div>
+
+        <div class="results" id="results">
+            <div class="score-card">
+                <div class="score-header">
+                    <div class="score-number" id="overallScore">0</div>
+                    <div class="score-label">综合得分</div>
+                </div>
+
+                <div class="score-breakdown">
+                    <div class="breakdown-item">
+                        <div class="label">准确性</div>
+                        <div class="value" id="accuracyScore">0</div>
+                    </div>
+                    <div class="breakdown-item">
+                        <div class="label">协调性</div>
+                        <div class="value" id="coordinationScore">0</div>
+                    </div>
+                    <div class="breakdown-item">
+                        <div class="label">稳定性</div>
+                        <div class="value" id="stabilityScore">0</div>
+                    </div>
+                </div>
+
+                <div class="feedback-section">
+                    <h3>✨ 动作点评</h3>
+                    <ul class="feedback-list" id="feedbackList"></ul>
+                </div>
+
+                <button class="restart-btn" onclick="restart()">🔄 重新评估</button>
+            </div>
+
+            <div class="suggestions">
+                <h3>💡 改进建议</h3>
+                <div id="suggestionList"></div>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="fileInput" accept="image/*" onchange="handleFileUpload(event)">
+
+    <script>
+        let state = {
+            inputMode: 'camera',
+            analyzeMode: 'photo',
+            hasCapture: false,
+            poses: [],
+            detector: null
+        };
+
+        let video = document.getElementById('videoElement');
+        let image = document.getElementById('imageElement');
+        let canvas = document.getElementById('canvasOverlay');
+        let ctx = canvas.getContext('2d');
+
+        function setInputMode(mode) {
+            state.inputMode = mode;
+            document.getElementById('cameraMode').classList.toggle('active', mode === 'camera');
+            document.getElementById('uploadMode').classList.toggle('active', mode === 'upload');
+
+            document.getElementById('startCamera').classList.toggle('hidden', mode !== 'camera');
+            document.getElementById('uploadBtn').classList.toggle('hidden', mode !== 'upload');
+            document.getElementById('modeSelector').classList.toggle('hidden', mode !== 'camera');
+
+            resetDisplay();
+        }
+
+        function setAnalyzeMode(mode) {
+            state.analyzeMode = mode;
+            document.getElementById('photoMode').classList.toggle('active', mode === 'photo');
+            document.getElementById('videoMode').classList.toggle('active', mode === 'video');
+        }
+
+        function resetDisplay() {
+            video.style.display = 'none';
+            image.style.display = 'none';
+            document.getElementById('placeholder').style.display = 'block';
+            state.hasCapture = false;
+            document.getElementById('analyzeBtn').disabled = true;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function restart() {
+            document.getElementById('results').style.display = 'none';
+            resetDisplay();
+            hideStatus();
+        }
+
+        function showStatus(message, type) {
+            let status = document.getElementById('status');
+            status.style.display = 'block';
+            status.textContent = message;
+            status.style.background = type === 'error' ? 'rgba(244, 67, 54, 0.2)' :
+                                   type === 'ready' ? 'rgba(76, 175, 80, 0.2)' :
+                                   'rgba(255, 152, 0, 0.2)';
+        }
+
+        function hideStatus() {
+            document.getElementById('status').style.display = 'none';
+        }
+
+        async function loadDetector() {
+            if (!state.detector) {
+                showStatus('正在加载 AI 模型...', 'loading');
+                state.detector = await poseDetection.createDetector(
+                    poseDetection.SupportedModels.MoveNet,
+                    {
+                        modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
+                    }
+                );
+            }
+        }
+
+        async function startCamera() {
+            try {
+                await loadDetector();
+
+                showStatus('正在开启摄像头...', 'loading');
+
+                let stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+
+                video.srcObject = stream;
+                await video.play();
+
+                document.getElementById('placeholder').style.display = 'none';
+                hideStatus();
+                showStatus('摄像头已就绪，点击「开始分析」', 'ready');
+
+                video.style.display = 'block';
+                image.style.display = 'none';
+
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                detectPose();
+
+                state.hasCapture = true;
+                document.getElementById('analyzeBtn').disabled = false;
+
+            } catch (error) {
+                showStatus('无法开启摄像头: ' + error.message, 'error');
+            }
+        }
+
+        function handleFileUpload(event) {
+            let file = event.target.files[0];
+            if (!file) return;
+
+            loadDetector().then(() => {
+                let reader = new FileReader();
+
+                reader.onload = (e) => {
+                    image.src = e.target.result;
+                    image.style.display = 'block';
+                    video.style.display = 'none';
+                    document.getElementById('placeholder').style.display = 'none';
+
+                    image.onload = () => {
+                        canvas.width = image.naturalWidth;
+                        canvas.height = image.naturalHeight;
+                        hideStatus();
+                        showStatus('已加载，点击「开始分析」', 'ready');
+                        state.hasCapture = true;
+                        document.getElementById('analyzeBtn').disabled = false;
+                    };
+                };
+
+                reader.readAsDataURL(file);
+            }).catch(error => {
+                showStatus('加载失败: ' + error.message, 'error');
+            });
+        }
+
+        async function detectPose() {
+            if (!state.detector || state.inputMode !== 'camera') return;
+
+            try {
+                let poses = await state.detector.estimatePoses(video);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                if (poses.length > 0) {
+                    drawPose(poses[0]);
+                }
+            } catch (error) {
+                console.error(error);
+            }
+
+            requestAnimationFrame(detectPose);
+        }
+
+        function drawPose(pose) {
+            let keypoints = pose.keypoints;
+
+            keypoints.forEach(keypoint => {
+                if (keypoint.score > 0.3) {
+                    ctx.beginPath();
+                    ctx.arc(keypoint.x, keypoint.y, 5, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#00d4ff';
+                    ctx.fill();
+                }
+            });
+
+            let connections = [
+                ['left_shoulder', 'right_shoulder'],
+                ['left_shoulder', 'left_elbow'], ['left_elbow', 'left_wrist'],
+                ['right_shoulder', 'right_elbow'], ['right_elbow', 'right_wrist'],
+                ['left_shoulder', 'left_hip'], ['right_shoulder', 'right_hip'],
+                ['left_hip', 'right_hip'],
+                ['left_hip', 'left_knee'], ['left_knee', 'left_ankle'],
+                ['right_hip', 'right_knee'], ['right_knee', 'right_ankle']
+            ];
+
+            let keypointMap = {};
+            keypoints.forEach(kp => keypointMap[kp.name] = kp);
+
+            connections.forEach(([start, end]) => {
+                let startKp = keypointMap[start];
+                let endKp = keypointMap[end];
+
+                if (startKp && endKp && startKp.score > 0.3 && endKp.score > 0.3) {
+                    ctx.beginPath();
+                    ctx.moveTo(startKp.x, startKp.y);
+                    ctx.lineTo(endKp.x, endKp.y);
+                    ctx.strokeStyle = '#7b2cbf';
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                }
+            });
+        }
+
+        async function analyze() {
+            if (state.inputMode === 'camera') {
+                let poses = await state.detector.estimatePoses(video);
+                if (poses.length > 0) {
+                    state.poses = [poses[0]];
+                }
+            } else if (state.inputMode === 'upload') {
+                let poses = await state.detector.estimatePoses(image);
+                if (poses.length > 0) {
+                    state.poses = [poses[0]];
+                    drawPose(poses[0]);
+                }
+            }
+
+            processResults();
+        }
+
+        async function processResults() {
+            if (state.poses.length === 0) {
+                showStatus('未能检测到人体姿态，请调整位置后重试', 'error');
+                return;
+            }
+
+            showStatus('正在分析...', 'loading');
+
+            try {
+                let results = await analyzeWithAPI(state.poses);
+                displayResults(results);
+                hideStatus();
+            } catch (error) {
+                console.error(error);
+                showStatus('分析失败: ' + error.message, 'error');
+            }
+        }
+
+        async function analyzeWithAPI(poses) {
+            let response = await fetch('/api/analyze', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    poses: poses,
+                    timestamp: Date.now()
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('API 请求失败');
+            }
+
+            return await response.json();
+        }
+
+        function displayResults(results) {
+            document.getElementById('overallScore').textContent = results.overall;
+            document.getElementById('accuracyScore').textContent = results.accuracy;
+            document.getElementById('coordinationScore').textContent = results.coordination;
+            document.getElementById('stabilityScore').textContent = results.stability;
+
+            let feedbackList = document.getElementById('feedbackList');
+            feedbackList.innerHTML = '';
+
+            if (results.feedback && results.feedback.length > 0) {
+                results.feedback.forEach(item => {
+                    let li = document.createElement('li');
+                    li.className = 'feedback-item ' + (item.type || 'good');
+                    li.innerHTML = '<span class="icon">' + (item.icon || '✅') + '</span><span>' + item.text + '</span>';
+                    feedbackList.appendChild(li);
+                });
+            }
+
+            let suggestionList = document.getElementById('suggestionList');
+            suggestionList.innerHTML = '';
+
+            if (results.suggestions && results.suggestions.length > 0) {
+                results.suggestions.forEach(suggestion => {
+                    let div = document.createElement('div');
+                    div.className = 'suggestion-item';
+                    div.textContent = suggestion;
+                    suggestionList.appendChild(div);
+                });
+            }
+
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+</html>
